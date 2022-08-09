@@ -1,0 +1,763 @@
+---
+title: "Flexdash_webapp"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social:
+    - twitter
+    - facebook
+    - whatsapp
+    - menu
+    vertical_layout: scroll
+    theme: cosmo
+runtime: shiny
+resource_files:
+- Test_data/count_data.csv
+- Test_data/sample_info.csv
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(BiocManager)
+library(ggplot2)
+library(ggridges)
+library(plotly)
+library(ggpubr)
+library(tidyverse)
+library(DT)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(ggstatsplot)
+library(stringr) 
+library(qdap) 
+library(gridExtra)
+library(grid)
+library(dplyr)
+library(hrbrthemes)
+library(Matrix)
+library(DESeq2)
+library(ggcorrplot)
+library(rsconnect)
+
+
+```
+
+
+Data-Quality {data-navmenu="RNA-Seq"}
+======================================================================
+
+
+sidebar{.sidebar}
+-----------------------------------------------------------------------
+
+
+
+
+```{r}
+fileInput('countfile', 'Choose Countfile-CSV ',
+                accept=c("text/csv", "text/comma-separated-values","text/tab-separated-values", "text/plain",".csv", ".tsv" ))
+
+checkboxInput('header', 'Header', TRUE)  
+radioButtons('sep', 'Separator',
+                   c(Comma=',',
+                     Semicolon=';',
+                     Tab='\t', Text=".txt", Excel=".xls")
+              )
+radioButtons('quote', 'Quote',
+                   c(None='',
+                     'Double Quote'='"',
+                     'Single Quote'="'"),
+                   '"')
+```
+
+
+
+```{r}
+fileInput('metafile', 'Choose Sampleinfo CSV File',
+                accept=c("text/csv", "text/comma-separated-values","text/tab-separated-values", "text/plain",".csv", ".tsv"))
+checkboxInput('header2', 'Header', TRUE)  
+radioButtons('sep2', 'Separator',
+                   c(Comma=',',
+                     Semicolon=';',
+                     Tab='\t', Text=".txt", Excel=".xls")
+              )
+radioButtons('quote2', 'Quote',
+                   c(None='',
+                     'Double Quote'='"',
+                     'Single Quote'="'"),
+                   '"')
+```
+
+
+
+```{r}
+selectInput('xcol', 'Select x:', "")
+selectInput('ycol', 'Select y:', "")
+selectInput("plot.type","Plot Typ:", list(bar = "bar", boxplot = "boxplot", histogram = "histogram", density = "density"))
+
+```
+
+
+
+```{r}
+# selectInput('xbox', 'Select Normal Samples:', "", multiple = TRUE)
+# selectInput('ybox', 'Select Cancer Samples:', "", multiple = TRUE)
+
+#selectInput("plot.type","Plot Typ:", list(bar = "bar", boxplot = "boxplot", histogram = "histogram", density = "density"))
+
+```
+
+
+
+
+Column {.tabset}
+-----------------------------------------------------------------------
+
+### Count Data 
+
+```{r}
+
+countdata <- reactive({ req(input$countfile) ## ?req # require that the input is available
+inFile_for_count <- input$countfile 
+if(is.null(inFile_for_count)){return()} 
+
+df_count <- read.csv(inFile_for_count$datapath, header = input$header, sep = input$sep, quote = input$quote, row.names = 1, stringsAsFactors = FALSE)
+
+updateSelectInput(session, inputId = 'xcol', label = 'Select x:', choices = names(df_count), selected = names(df_count))
+updateSelectInput(session, inputId = 'ycol', label = 'Select y:', choices = names(df_count), selected = names(df_count)[2])
+
+#-------------Update input xbox and ybox for boxplot
+# updateSelectInput(session, inputId = 'xbox', label = 'Select Normal Samples:', choices = names(df_count), selected = names(df_count))
+# updateSelectInput(session, inputId = 'ybox', label = 'Select Cancer Samples:', choices = names(df_count), selected = names(df_count)[2])
+
+return(df_count)
+})
+
+div(
+renderDataTable({
+  DT::datatable(countdata(), rownames = TRUE, options = list(pageLength = 5, width="100%", scrollX = TRUE, scrollY=TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+
+
+
+```
+
+### Meta Data
+
+```{r}
+
+metadata <- reactive({ req(input$metafile) ## ?req # require that the input is available
+inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+
+df_meta <- read.csv(inFile_for_meta$datapath, header = input$header2, sep = input$sep2, quote = input$quote2, row.names = 1, stringsAsFactors = FALSE)
+
+updateSelectInput(session, inputId = 'condition', label = 'condition:', choices = names(df_meta), selected = names(df_meta))
+
+
+
+
+
+return(df_meta)
+
+})
+
+
+
+
+
+
+div(
+renderDataTable({
+  DT::datatable(metadata(), rownames = TRUE, options = list(pageLength = 5,  width="100%", scrollX = TRUE, scrollY = TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+                
+
+```
+
+
+
+### RAW Counts
+```{r}
+
+
+old_count <- reactive({ 
+factor1 <- metadata()[, names(metadata()) %in% c(input$condition)] 
+
+conditionDF <- data.frame(row.names = colnames(countdata()), factor1 = as.factor(factor1)) 
+
+mycolData <- conditionDF 
+
+dds_obj <-DESeqDataSetFromMatrix(countData = countdata(), colData = mycolData, design = ~factor1) 
+
+dds_count <- counts(dds_obj) 
+
+return(dds_count) 
+
+})
+  
+
+div(
+renderDataTable({
+  DT::datatable(old_count(), rownames = FALSE, options = list(pageLength = 5, width="100%", scrollX = TRUE, scrollY=TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+
+
+```
+
+
+
+
+
+valuebox 
+-----------------------------------------------------------------------
+### countdata-colms
+```{r}
+
+renderValueBox({ req(input$metafile)
+  inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+  
+  col_c<- ncol(countdata())
+  valueBox(col_c, 
+           icon = "fa-grip-horizontal",
+           color= "#06B4A8" )
+})
+
+```
+
+### metadata-rows 
+```{r}
+
+renderValueBox({ req(input$metafile)
+  inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+  
+  
+  row_m<- nrow(metadata())
+  valueBox(row_m, 
+           icon = "fa-grip-horizontal",
+           color= "#14BEDA" )
+})
+
+```
+
+### rowname=columname?
+
+```{r}
+renderValueBox({ req(input$metafile)
+  inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+  
+  
+  
+ logics<- all(rownames(metadata()) == colnames(countdata()))
+  valueBox(logics, 
+           icon = "fa-grip-horizontal",
+           color= "#126EA8" )
+
+})
+```
+
+
+valuebox 
+-----------------------------------------------------------------------
+### Number of Genes  {.valuebox}
+
+```{r}
+renderValueBox({ req(input$metafile)
+  inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+  
+  
+  rows<- nrow(countdata())
+  valueBox(rows, 
+           icon = "fa-grip-horizontal",
+           color= "#856CA3" )
+})
+```
+
+### Number of Samples {.valuebox}
+
+```{r}
+renderValueBox({ req(input$metafile)
+  inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+  
+  
+  cols<- ncol(countdata())
+  valueBox(cols, 
+           icon = "fa-columns",
+           color= "#6495ED")
+})
+```
+
+### rows with zero count{.valuebox}
+```{r}
+renderValueBox({ req(input$metafile)
+  inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+  
+  
+  zero<- Matrix::rowSums(countdata()==0)
+  zero_counts = sum(zero)
+  valueBox(zero_counts, 
+           icon = "fa-circle-notch",
+           color= "#117864")
+})
+```
+
+
+
+
+Column {.tabset}
+-----------------------------------------------------------------------
+### Countplot
+```{r}
+renderPlotly({
+    
+  
+  
+  if(input$plot.type == "bar"){
+        p <-  ggplot(countdata(),aes(x=as.factor(countdata()[,input$xcol]),fill=as.factor(countdata()[,input$ycol]),group = as.factor(countdata()[,input$ycol])))+
+          geom_bar(aes(y=..prop..*100),position=position_dodge())+
+          ggtitle("Percentage of count value")+
+          xlab(input$xcol)+ylab("Percentage") +scale_fill_discrete(name=input$ycol)
+        ggplotly(p) %>% layout(autosize=TRUE) %>% style(hoverinfo = "none")
+        
+    
+    } else{
+      if(input$plot.type == "boxplot"){
+      p <- ggplot(na.omit(countdata()), aes(x=na.omit(countdata())[,input$ycol],y=na.omit(countdata())[,input$xcol], fill =na.omit(countdata())[,input$ycol]))+
+        geom_boxplot(na.rm = TRUE)+ ggtitle("Relation between samples")+
+        xlab(input$ycol)+ylab(input$xcol) +scale_fill_discrete(name=input$ycol)
+      ggplotly(p) %>% layout(autosize=TRUE)# %>% style(hoverinfo = "none")
+        } else {
+           if(input$plot.type == "histogram"){
+             p <-  ggplot(countdata(),aes(x=countdata()[,input$xcol]))+
+               geom_histogram()+
+               ggtitle("Histogramm")+
+               xlab(input$xcol) #+scale_fill_discrete(name=input$ycol)
+             ggplotly(p) %>% layout(autosize=TRUE) %>% style(hoverinfo = "none")
+           }
+      }}
+    
+  })
+
+
+
+```
+
+
+### Low Counts Chart
+```{r}
+
+
+
+renderPlotly({
+q =  ggplot(countdata()) +
+  geom_histogram(aes(x = countdata()[,input$xcol]), stat = "bin", bins = 200) +
+  xlab(input$xcol) +
+  ylab("Number of genes")
+  ggplotly(q)
+})
+
+
+
+```
+
+### Correlation of Samples
+```{r}
+renderPlotly({
+  mob = countdata()[, -1]
+ z = ggcorrmat(
+  data = mob,
+  colors = c("#dbd886", "white", "#5dd4aa"),
+  title = "Correlalogram for samples",
+  subtitle = "sleep units: hours; weight units: kilograms"
+)
+ ggplotly(z)
+})
+
+
+```
+
+
+### Boxplot
+```{r}
+
+#count_mat <- reactive({ as.matrix.data.frame(countdata())})
+
+#renderPlotly({
+#  dat = countdata()
+#zz<- ggplot(na.omit(dat), aes_string(x=.dat[[input$ybox]], y=dat()[[input$xbox]]))+
+#  geom_boxplot(na.rm = TRUE)+ ggtitle("Relation ")
+#  ggplotly(zz) %>% layout(autosize=TRUE)# %>% style(hoverinfo = "none")
+#  ggplotly(zz)
+  
+#})
+
+# make a colour vector
+
+
+renderPlot({
+  statusCol <- as.numeric(factor(metadata()$type)) 
+  boxplot(countdata(),
+          las=2,
+        col=statusCol)
+  # Let's add a blue horizontal line that corresponds to the median logCPM
+abline(h=median(as.matrix(countdata()), col="blue"))
+})
+
+```
+
+
+
+
+
+
+
+
+
+DGE-Analysis {data-navmenu="RNA-Seq"}
+======================================================================  
+
+
+sidebar{.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+selectInput('condition', 'Select condition:', "")
+
+
+selectInput('baselevel', 'Select base level:', "")
+
+selectInput('comparelevel', 'Select compare level:', "")
+
+
+```
+
+
+
+
+
+column {.tabset}
+-----------------------------------------------------------------------
+
+### Meta
+
+```{r}
+
+metadata <- reactive({ req(input$metafile) ## ?req # require that the input is available
+inFile_for_meta <- input$metafile 
+if(is.null(inFile_for_meta)){return()}
+
+df_meta <- read.csv(inFile_for_meta$datapath, header = input$header2, sep = input$sep2, quote = input$quote2, row.names = 1, stringsAsFactors = FALSE)
+
+updateSelectInput(session, inputId = 'condition', label = 'condition:', choices = names(df_meta), selected = names(df_meta))
+
+return(df_meta)
+
+})
+
+
+
+div(
+renderDataTable({
+  DT::datatable(metadata(), rownames = TRUE, options = list(pageLength = 5,  width="100%", scrollX = TRUE, scrollY = TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+                
+
+```
+
+
+```{r}
+met_level <- reactive({  ## ?req # require that the input is available
+
+  
+lv <- metadata()[, names(metadata()) %in% c(input$condition)]
+
+lv <- as.factor(lv)
+
+return(lv)
+
+})
+
+
+renderPrint({
+  
+  met_level()
+  
+  
+})
+
+reactive({
+
+updateSelectInput(session, inputId = 'baselevel', label = 'Select Base level:', choices = met_level(), selected = met_level())
+})
+
+reactive({
+
+updateSelectInput(session, inputId = 'comparelevel', label = 'Select Compare level:', choices = met_level(), selected = met_level())
+})
+
+```
+
+
+
+
+### Normalized Counts
+```{r}
+
+Normalizedcount <- reactive({
+
+factor1 <- metadata()[, names(metadata()) %in% c(input$condition)]
+
+conditionDF <- data.frame(row.names = colnames(countdata()), factor1 = as.factor(factor1))
+
+mycolData <- conditionDF
+
+
+
+dds_obj <-DESeqDataSetFromMatrix(countData = countdata(), colData = mycolData, design = ~factor1)
+
+dds <- DESeq(dds_obj)
+dds <- estimateSizeFactors(dds)
+  
+normalize_count <- counts(dds, normalized=TRUE)
+
+return(normalize_count)
+
+})
+  
+
+div(
+renderDataTable({
+  DT::datatable(Normalizedcount(), rownames = FALSE, options = list(pageLength = 5, width="100%", scrollX = TRUE, scrollY=TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+
+
+```
+
+
+
+### Res Table
+```{r}
+
+getres <- reactive({
+  
+factor1 <- metadata()[, names(metadata()) %in% c(input$condition)]
+
+conditionDF <- data.frame(row.names = colnames(countdata()), factor1 = as.factor(factor1))
+
+mycolData <- conditionDF
+
+dds_obj <-DESeqDataSetFromMatrix(countData = countdata(), colData = mycolData, design = ~factor1)
+
+
+  dds_count <- counts(dds_obj)
+  dds <- DESeq(dds_obj)
+  dds <- estimateSizeFactors(dds)
+  res <- results(dds)
+ 
+  
+  
+  
+  ## Define contrasts, extract results table, and shrink the log2 fold changes
+
+#  contrast_oe <- c("sampletype", "MOV10_overexpression", "control")
+
+#  res_tableOE_unshrunken <- results(dds, contrast=contrast_oe, alpha = 0.05)
+
+#  res_tableOE <- lfcShrink(dds, contrast=contrast_oe, res=res_tableOE_unshrunken)
+  
+  # res <- results(dds, contrast=c("input$condition","input$comparelevel","input$baselevel"))
+  
+  
+  res_df <- as.data.frame(res)
+  return(res_df)
+})
+  
+
+div(
+renderDataTable({
+  #old_count <- getres()
+  DT::datatable(getres(), rownames = TRUE, options = list(pageLength = 5,  width="100%", scrollX = TRUE, scrollY = TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+
+
+```
+
+
+
+### Releveled Res Table
+```{r}
+
+getres_rev <- reactive({
+  
+factor1 <- metadata()[, names(metadata()) %in% c(input$condition)]
+
+factor2 <- as.factor(factor1)
+
+conditionDF <- data.frame(row.names = colnames(countdata()), factor2)
+
+mycolData <- conditionDF
+
+dds_obj <-DESeqDataSetFromMatrix(countData = countdata(), colData = mycolData, design = ~factor2)
+
+
+  dds_count <- counts(dds_obj)
+  dds <- DESeq(dds_obj)
+  dds <- estimateSizeFactors(dds)
+  res <- results(dds)
+  res_df <- as.data.frame(res)
+  
+  
+  
+  ## Define contrasts, extract results table, and shrink the log2 fold changes
+  
+  condition_name = as.name(input$condition)
+  
+  baselevel_name = as.name(input$baselevel)
+  
+  comparelevel_name = as.name(input$comparelevel)
+  
+  
+
+ contrast <- c("condition_name", "comparelevel_name", "baselevel_name")
+
+ res_table_unshrunken <- results(dds, contrast=contrast, alpha = 0.05)
+
+ res_table <- lfcShrink(dds, contrast=contrast, res=res_table_unshrunken)
+  
+  
+  
+  return(res_table)
+})
+  
+
+div(
+renderDataTable({
+  #old_count <- getres()
+  DT::datatable(getres_rev(), rownames = TRUE, options = list(pageLength = 5,  width="100%", scrollX = TRUE, scrollY = TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+
+
+```
+
+### Releveled Res Table-2
+```{r}
+getres <- reactive({
+  
+factor1 <- metadata()[, names(metadata()) %in% c(input$condition)]
+
+conditionDF <- data.frame(row.names = colnames(countdata()), factor1 = as.factor(factor1))
+
+mycolData <- conditionDF
+
+dds_obj <-DESeqDataSetFromMatrix(countData = countdata(), colData = mycolData, design = ~factor1)
+
+
+  dds_count <- counts(dds_obj)
+  dds <- DESeq(dds_obj)
+  dds <- estimateSizeFactors(dds)
+  res <- results(dds)
+ 
+  
+  
+  
+  ## Define contrasts, extract results table, and shrink the log2 fold changes
+
+#  contrast_oe <- c("sampletype", "MOV10_overexpression", "control")
+
+#  res_tableOE_unshrunken <- results(dds, contrast=contrast_oe, alpha = 0.05)
+
+#  res_tableOE <- lfcShrink(dds, contrast=contrast_oe, res=res_tableOE_unshrunken)
+  
+  res <- results(dds, contrast=c("input$condition","input$comparelevel","input$baselevel"))
+  
+  
+  res_df <- as.data.frame(res)
+  return(res_df)
+})
+  
+
+div(
+renderDataTable({
+  #old_count <- getres()
+  DT::datatable(getres(), rownames = TRUE, options = list(pageLength = 5,  width="100%", scrollX = TRUE, scrollY = TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+
+```
+
+
+
+### Resultnames
+```{r}
+
+resultnames <- reactive({
+  
+factor1 <- metadata()[, names(metadata()) %in% c(input$condition)]
+
+factor2 <- as.factor(factor1)
+
+conditionDF <- data.frame(row.names = colnames(countdata()), factor2)
+
+mycolData <- conditionDF
+
+dds_obj <-DESeqDataSetFromMatrix(countData = countdata(), colData = mycolData, design = ~factor2)
+
+
+  dds_count <- counts(dds_obj)
+  dds <- DESeq(dds_obj)
+  dds <- estimateSizeFactors(dds)
+  res <- results(dds)
+  res_df <- as.data.frame(res)
+  
+  
+  
+  
+  return(mycolData)
+})
+  
+
+
+div(
+renderDataTable({
+  #old_count <- getres()
+  DT::datatable(resultnames(), rownames = TRUE, options = list(pageLength = 5,  width="100%", scrollX = TRUE, scrollY = TRUE))
+}), style = "font-size: 80%; width: 100%"
+)
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+Chipseq Data {data-navmenu="Chip-Seq"}
+======================================================================
+
+
+Chipseq Result {data-navmenu="Chip-Seq"}
+======================================================================
+
+
+
